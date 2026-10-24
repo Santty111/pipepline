@@ -9,6 +9,10 @@ Esta documentación describe la solución avanzada implementada para el **Micros
 El repositorio aloja un microservicio REST en Node.js de producción con enrutamiento nativo, métricas de observabilidad y control de stock:
 
 ```
+├── pipeline/
+│   └── modules/
+│       ├── notifications.groovy        # Módulo Groovy desacoplado: GitHub Status & Discord
+│       └── qualityGate.groovy          # Módulo Groovy desacoplado: Inspección Quality Gate
 ├── src/
 │   ├── app.js                          # Servidor HTTP REST, enrutamiento, CORS y métricas
 │   ├── server.js                       # Entrypoint con graceful shutdown
@@ -21,12 +25,9 @@ El repositorio aloja un microservicio REST en Node.js de producción con enrutam
 │   ├── linter.js                       # Análisis estático de código y estilo (Linter)
 │   └── code-quality.js                 # Evaluador de SonarQube / Quality Gate
 ├── tests/
-│   ├── unit/
-│   │   ├── validator.test.js           # Pruebas unitarias de validación
-│   │   └── products.test.js            # Pruebas unitarias de inventario
-│   └── integration/
-│       └── api.test.js                 # Pruebas End-to-End (E2E) con servidor HTTP en vivo
-├── Jenkinsfile                         # Pipeline Declarativo Optimizado
+│   ├── unit/                           # Pruebas unitarias
+│   └── integration/                    # Pruebas End-to-End (E2E) con servidor HTTP en vivo
+├── Jenkinsfile                         # Orquestador Declarativo Modular
 └── package.json                        # Definición y scripts del microservicio
 ```
 
