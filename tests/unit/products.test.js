@@ -35,4 +35,11 @@ test('Suite de Pruebas Unitarias - Controlador de Productos', async (t) => {
     const resInvalido = productController.actualizarStock(1, -999);
     assert.strictEqual(resInvalido.exito, false);
   });
+
+  await t.test('buscarPorTermino() debe filtrar productos por nombre o categoría', () => {
+    const res = productController.buscarPorTermino('cisco');
+    assert.strictEqual(res.exito, true);
+    assert.strictEqual(res.total, 1);
+    assert.strictEqual(res.datos[0].sku, 'PROD-1002');
+  });
 });
