@@ -1,17 +1,19 @@
 /**
  * =============================================================================
- * PIPELINE DECLARATIVO CI/CD EMPRESARIAL OPTIMIZADO
+ * PIPELINE DECLARATIVO CI/CD EMPRESARIAL - ARQUITECTURA MODULAR
  * Proyecto: Microservicio de Gestión de Inventario (DevOps Inventory API)
  * Repositorio: https://github.com/Santty111/pipepline.git
  * 
- * ESTRATEGIAS DE OPTIMIZACIÓN APLICADAS:
- *  1. Ejecución Paralela: Linting, Unit Testing y Security Audit en paralelo.
- *  2. Estrategia de Branching: Flujo diferenciado (feature/* vs develop vs main).
- *  3. Ejecución Selectiva: Etapas pesadas (E2E y Build) solo en ramas objetivo.
- *  4. Caché de Dependencias: Detección inteligente de cambios en package.json.
- *  5. Notificaciones Multi-Canal: Discord Webhook + GitHub Commit Status API.
+ * MODULARIDAD APLICADA (Separación de Código Groovy):
+ *  - pipeline/modules/notifications.groovy : Gestión desacoplada de notificaciones.
+ *  - pipeline/modules/qualityGate.groovy   : Inspección de métricas y Quality Gate.
+ *  - Jenkinsfile                            : Orquestación pura declarativa.
  * =============================================================================
  */
+
+// Instancias globales de los módulos Groovy separados
+def notificador = null
+def qualityHelper = null
 
 pipeline {
     agent any
@@ -24,38 +26,44 @@ pipeline {
     }
 
     environment {
-        // Credenciales en Jenkins
+        // Credenciales registradas en Jenkins
         GIT_CREDENTIALS_ID      = 'gitlab-private-repo-creds'
         NOTIFICATION_WEBHOOK_ID = 'devops-discord-webhook'
         
-        // Repositorio y Configuración
+        // Repositorio y Contexto GitHub
         REPO_URL                = 'https://github.com/Santty111/pipepline.git'
         GITHUB_REPO_OWNER       = 'Santty111'
         GITHUB_REPO_NAME        = 'pipepline'
         
-        // Entorno y Optimización
+        // Entorno
         NODE_ENV                = 'production'
-        CACHE_DIR               = "${JENKINS_HOME}/.dependency-cache"
     }
 
     stages {
         // =====================================================================
-        // ETAPA 1: CHECKOUT & CONTROL DE INTEGRACIÓN
+        // ETAPA 1: CHECKOUT & CARGA MODULAR DE SCRIPTS GROOVY
         // =====================================================================
-        stage('Checkout & Trazabilidad') {
+        stage('Checkout & Módulos Groovy') {
             steps {
-                echo "===> [ETAPA 1] Descargando código fuente..."
+                echo "===> [ETAPA 1] Descargando repositorio..."
                 checkout scm
 
                 script {
+                    // Carga dinámica de los módulos Groovy externos
+                    notificador = load 'pipeline/modules/notifications.groovy'
+                    qualityHelper = load 'pipeline/modules/qualityGate.groovy'
+
                     env.GIT_COMMIT_HASH = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                     env.GIT_CURRENT_BRANCH = env.BRANCH_NAME ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-                    echo "📌 Rama actual : ${env.GIT_CURRENT_BRANCH}"
-                    echo "📌 Commit SHA  : ${env.GIT_COMMIT_HASH}"
-                }
 
-                // Notificar a GitHub que el pipeline ha comenzado (estado: pending)
-                actualizarStatusGitHub('pending', 'Pipeline Jenkins en progreso...')
+                    qualityHelper.imprimirEncabezadoEtapa('Integración', "Módulos cargados exitosamente en rama: ${env.GIT_CURRENT_BRANCH}")
+
+                    // Notificación inicial a GitHub Commit Status vía módulo Groovy
+                    notificador.actualizarStatusGitHub(
+                        estado: 'pending',
+                        descripcion: 'Pipeline Jenkins en progreso...'
+                    )
+                }
             }
         }
 
@@ -66,11 +74,9 @@ pipeline {
             steps {
                 echo "===> [ETAPA 2] Verificando dependencias y estado de caché..."
                 sh '''
-                    echo "Verificando versión de Node y herramientas:"
+                    echo "Versiones del entorno:"
                     node -v
                     npm -v
-
-                    # Simulación / Gestión de caché de dependencias basada en hash
                     HASH_ACTUAL=$(md5 -q package.json 2>/dev/null || md5sum package.json | awk '{print $1}')
                     echo "Hash de dependencias (package.json): ${HASH_ACTUAL}"
                 '''
@@ -78,10 +84,9 @@ pipeline {
         }
 
         // =====================================================================
-        // ETAPA 3: OPTIMIZACIÓN - EJECUCIÓN PARALELA
-        // Linting, Pruebas Unitarias y Auditoría de Seguridad se ejecutan concurrentemente
+        // ETAPA 3: OPTIMIZACIÓN - EJECUCIÓN PARALELA (FAST FEEDBACK)
         // =====================================================================
-        stage('Validación Paralela (Fast Feedback)') {
+        stage('Validación Paralela') {
             parallel {
                 stage('Linter & Code Style') {
                     steps {
@@ -107,8 +112,8 @@ pipeline {
         }
 
         // =====================================================================
-        // ETAPA 4: ANÁLISIS DE CALIDAD (SONAR QUALITY GATE)
-        // Ejecución selectiva: Solo en develop, main o ramas de release
+        // ETAPA 4: ANÁLISIS DE CALIDAD & QUALITY GATE
+        // Ejecución selectiva: develop, main o ramas release
         // =====================================================================
         stage('Calidad de Código & Sonar Gate') {
             when {
@@ -122,6 +127,9 @@ pipeline {
             steps {
                 echo "===> [ETAPA 4] Ejecutando Análisis de Deuda Técnica y Quality Gate..."
                 sh 'npm run quality:sonar'
+                script {
+                    qualityHelper.validarReporteCalidad('code-quality-report.json')
+                }
                 archiveArtifacts artifacts: 'code-quality-report.json', allowEmptyArchive: true
             }
         }
@@ -145,8 +153,8 @@ pipeline {
         }
 
         // =====================================================================
-        // ETAPA 6: BUILD & EMPAQUETADO DE ARTEFACTOS
-        // Ejecución selectiva: Solo en rama principal de producción (main)
+        // ETAPA 6: BUILD & EMPAQUETADO DE PRODUCCIÓN
+        // Ejecución selectiva: Solo en rama principal de producción (main / release)
         // =====================================================================
         stage('Build & Empaquetado') {
             when {
@@ -165,7 +173,7 @@ pipeline {
 
     // =========================================================================
     // POST-ACTIONS: NOTIFICACIONES (ALWAYS, SUCCESS, FAILURE)
-    // Multi-canal: Notificación a Discord + Actualización de Commit Status en GitHub
+    // Invoca los métodos de los módulos Groovy externos
     // =========================================================================
     post {
         always {
@@ -176,73 +184,36 @@ pipeline {
 
         success {
             script {
-                echo "===> [POST-SUCCESS] ¡Pipeline Exitoso! Enviando notificaciones..."
-                actualizarStatusGitHub('success', 'Pipeline CI/CD exitoso en Jenkins')
-                enviarNotificacionDiscord('SUCCESS', 3066993, '✅ Pipeline Exitoso: Todas las etapas y pruebas fueron aprobadas.')
+                echo "===> [POST-SUCCESS] ¡Pipeline Exitoso! Invocando módulo Groovy de notificación..."
+                if (notificador) {
+                    notificador.actualizarStatusGitHub(
+                        estado: 'success',
+                        descripcion: 'Pipeline CI/CD exitoso en Jenkins'
+                    )
+                    notificador.enviarNotificacionDiscord(
+                        estado: 'SUCCESS',
+                        color: 3066993,
+                        descripcion: '✅ Pipeline Exitoso: Todas las etapas y pruebas fueron aprobadas.'
+                    )
+                }
             }
         }
 
         failure {
             script {
-                echo "===> [POST-FAILURE] ¡Pipeline Fallido! Enviando alertas..."
-                actualizarStatusGitHub('failure', 'Pipeline CI/CD falló en Jenkins')
-                enviarNotificacionDiscord('FAILURE', 15158332, '❌ Pipeline Fallido: Se detectó un error en pruebas o análisis de calidad.')
+                echo "===> [POST-FAILURE] ¡Pipeline Fallido! Invocando módulo Groovy de alerta..."
+                if (notificador) {
+                    notificador.actualizarStatusGitHub(
+                        estado: 'failure',
+                        descripcion: 'Pipeline CI/CD falló en Jenkins'
+                    )
+                    notificador.enviarNotificacionDiscord(
+                        estado: 'FAILURE',
+                        color: 15158332,
+                        descripcion: '❌ Pipeline Fallido: Se detectó un error en pruebas o análisis de calidad.'
+                    )
+                }
             }
         }
-    }
-}
-
-// =============================================================================
-// MÓDULOS Y FUNCIONES REUTILIZABLES (Modular Pipeline Functions)
-// =============================================================================
-
-/**
- * Actualiza el estado del commit directamente en GitHub vía API REST
- * Estados soportados por GitHub: 'pending', 'success', 'failure', 'error'
- */
-def actualizarStatusGitHub(String estado, String descripcion) {
-    withCredentials([usernamePassword(credentialsId: env.GIT_CREDENTIALS_ID, usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
-        sh """
-            COMMIT_SHA=\$(git rev-parse HEAD 2>/dev/null || echo "${env.GIT_COMMIT_HASH}")
-            curl -s -X POST \
-                -H "Accept: application/vnd.github+json" \
-                -H "Authorization: Bearer \$GH_TOKEN" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/statuses/\$COMMIT_SHA" \
-                -d '{
-                    "state": "${estado}",
-                    "target_url": "${env.BUILD_URL}",
-                    "description": "${descripcion}",
-                    "context": "ci/jenkins-pipeline"
-                }' > /dev/null || true
-        """
-    }
-}
-
-/**
- * Envía una tarjeta embebida enriquecida al canal de Discord
- */
-def enviarNotificacionDiscord(String estado, int color, String descripcion) {
-    withCredentials([string(credentialsId: env.NOTIFICATION_WEBHOOK_ID, variable: 'WEBHOOK_URL')]) {
-        sh """
-            curl -s -X POST -H "Content-Type: application/json" \
-            -d '{
-                "username": "Jenkins Enterprise CI/CD",
-                "avatar_url": "https://www.jenkins.io/images/logos/jenkins/jenkins.png",
-                "embeds": [{
-                    "title": "Pipeline ${estado}: ${env.JOB_NAME}",
-                    "description": "${descripcion}",
-                    "color": ${color},
-                    "fields": [
-                        {"name": "Build", "value": "#${env.BUILD_NUMBER}", "inline": true},
-                        {"name": "Rama", "value": "${env.GIT_CURRENT_BRANCH ?: 'main'}", "inline": true},
-                        {"name": "Estrategia", "value": "Optimizado (Paralelo + Branching)", "inline": false},
-                        {"name": "Commit SHA", "value": "`${env.GIT_COMMIT_HASH ?: 'HEAD'}`", "inline": false},
-                        {"name": "Logs de Ejecución", "value": "${env.BUILD_URL}console", "inline": false}
-                    ],
-                    "footer": {"text": "Jenkins Automated CI/CD Engine"}
-                }]
-            }' "\$WEBHOOK_URL" || true
-        """
     }
 }
