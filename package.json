@@ -1,0 +1,12 @@
+{
+  "name": "devops-jenkins-demo",
+  "version": "1.0.0",
+  "description": "Proyecto de demostración para Pipeline CI/CD en Jenkins",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test index.test.js"
+  },
+  "keywords": ["jenkins", "ci-cd", "devops"],
+  "author": "DevOps Engineer",
+  "license": "MIT"
+}
