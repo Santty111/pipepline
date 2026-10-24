@@ -5,7 +5,7 @@ const { sumar, validarEmail } = require('./index');
 test('Suite de Pruebas Unitarias - DevOps CI/CD', async (t) => {
   await t.test('sumar() debe calcular la suma correctamente', () => {
     assert.strictEqual(sumar(2, 3), 5);
-    assert.strictEqual(sumar(-1, 1), 0);
+    assert.strictEqual(sumar(2, 3), 999);
   });
 
   await t.test('sumar() debe arrojar un error si los tipos no son números', () => {
