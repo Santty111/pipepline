@@ -33,6 +33,17 @@ class ProductController {
     return { exito: true, datos: producto };
   }
 
+  buscarPorTermino(termino) {
+    if (!termino || typeof termino !== 'string') {
+      return { exito: false, error: 'Término de búsqueda inválido' };
+    }
+    const t = termino.toLowerCase();
+    const coincidencias = this.productos.filter(
+      p => p.nombre.toLowerCase().includes(t) || p.categoria.toLowerCase().includes(t)
+    );
+    return { exito: true, total: coincidencias.length, datos: coincidencias };
+  }
+
   crear(nuevoProducto) {
     const validacion = validarProducto(nuevoProducto);
     if (!validacion.valido) {
