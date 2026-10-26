@@ -1,0 +1,280 @@
+version: 2.1
+
+# EQUIVALENCIA DIRECTA RESPECTO AL PIPELINE DE JENKINS:
+#  - Jenkins 'agent any'            ➔ CircleCI 'executors' (Docker cimg/node:20.11)
+#  - Jenkins 'parallel { ... }'     ➔ CircleCI Jobs concurrentes en Workflow DAG
+#  - Jenkins 'when { branch ... }'  ➔ CircleCI 'filters: branches: only: [...]'
+#  - Jenkins 'pipeline/modules/'    ➔ CircleCI 'commands' reutilizables y scripts
+#  - Jenkins 'post { success/fail }'➔ CircleCI 'when: on_fail / on_success' & notifier
+
+# 1. EXECUTORS REUTILIZABLES (Entornos de Ejecución Docker Homogéneos)
+executors:
+  node-executor:
+    docker:
+      - image: cimg/node:20.11
+    working_directory: ~/repo
+    environment:
+      NODE_ENV: production
+      CI: true
+
+# 2. COMMANDS MODULARES REUTILIZABLES (Lógica Desacoplada)
+commands:
+  setup_workspace:
+    description: "Clonar repositorio y mostrar telemetría del entorno"
+    steps:
+      - checkout
+      - run:
+          name: "Inspección de Entorno y Metadatos Git"
+          command: |
+            echo "========================================================="
+            echo "[CircleCI Runner] Inicializando Workspace..."
+            echo "Node Version : $(node -v)"
+            echo "NPM Version  : $(npm -v)"
+            echo "Rama Actual  : ${CIRCLE_BRANCH:-main}"
+            echo "Commit SHA   : ${CIRCLE_SHA1:-HEAD}"
+            echo "Job Actual   : ${CIRCLE_JOB}"
+            echo "========================================================="
+
+  restore_dependencies_cache:
+    description: "Restaurar dependencias desde la caché de CircleCI"
+    steps:
+      - restore_cache:
+          name: "Restaurando Caché de Dependencias (package.json checksum)"
+          keys:
+            - v1-deps-{{ checksum "package.json" }}
+            - v1-deps-
+
+  save_dependencies_cache:
+    description: "Almacenar dependencias en la caché inmutable de CircleCI"
+    steps:
+      - save_cache:
+          name: "Guardando Caché de Dependencias en la Nube"
+          paths:
+            - node_modules
+            - ~/.npm
+          key: v1-deps-{{ checksum "package.json" }}
+
+  notify_step_failure:
+    description: "Notificar fallo crítico a Discord y GitHub si el job falla"
+    parameters:
+      job_name:
+        type: string
+        default: "Job"
+    steps:
+      - run:
+          name: "Alerta de Fallo: Multi-Canal (Discord & GitHub)"
+          when: on_fail
+          command: |
+            echo "[Alerta] El job [<< parameters.job_name >>] falló. Disparando notificación..."
+            node scripts/notify-pipeline.js \
+              --status=failure \
+              --stage="<< parameters.job_name >>" \
+              --message="El job << parameters.job_name >> ha fallado durante la ejecución en CircleCI." || true
+
+  validate_quality_gate:
+    description: "Validar métricas del Sonar Quality Gate contra umbrales de producción"
+    steps:
+      - run:
+          name: "Inspeccionar Reporte de Quality Gate (Módulo Auditor)"
+          command: |
+            node -e '
+              const fs = require("fs");
+              const reportPath = "code-quality-report.json";
+              if (!fs.existsSync(reportPath)) {
+                console.error("[QualityGate] No se encontró el archivo:", reportPath);
+                process.exit(1);
+              }
+              const rep = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+              console.log("[QualityGate] Métricas analizadas:", rep.metricas);
+              console.log("[QualityGate] Estado:", rep.qualityGate.estado);
+              if (rep.qualityGate.estado !== "PASSED") {
+                console.error("[QualityGate] Quality Gate RECHAZADO: Umbrales no superados.");
+                process.exit(1);
+              }
+              console.log("[QualityGate] Quality Gate APROBADO para despliegue.");
+            '
+
+# 3. JOBS ATÓMICOS DEL PIPELINE
+jobs:
+  # JOB 1: PREPARACIÓN Y GESTIÓN INTELIGENTE DE CACHÉ
+  prepare-and-cache:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Instalación de Dependencias & Verificación de Manifiesto"
+          command: |
+            echo "Verificando integridad de package.json..."
+            HASH_PKG=$(node -e 'const fs=require("fs"),crypto=require("crypto");console.log(crypto.createHash("md5").update(fs.readFileSync("package.json")).digest("hex"));')
+            echo "Checksum MD5 package.json: ${HASH_PKG}"
+            if [ ! -d "node_modules" ]; then
+              echo "Caché no encontrada o incompleta. Instalando paquetes..."
+              npm install --prefer-offline --no-audit
+            else
+              echo "✅ Caché restaurada exitosamente. node_modules presente."
+            fi
+      - save_dependencies_cache
+      - notify_step_failure:
+          job_name: "Preparación & Caché"
+
+  # JOB 2: ANÁLISIS ESTÁTICO Y LINTER (EJECUCIÓN CONCURRENTE / PARALELA)
+  lint:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Linter & Análisis de Estilo de Código"
+          command: npm run lint
+      - notify_step_failure:
+          job_name: "Linter & Code Style"
+
+  # JOB 3: PRUEBAS UNITARIAS DE NEGOCIO (EJECUCIÓN CONCURRENTE / PARALELA)
+  unit-tests:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Pruebas Unitarias de Negocio y Controladores"
+          command: npm run test:unit
+      - notify_step_failure:
+          job_name: "Pruebas Unitarias"
+
+  # JOB 4: AUDITORÍA DE SEGURIDAD (EJECUCIÓN CONCURRENTE / PARALELA)
+  security-audit:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Auditoría de Vulnerabilidades y Dependencias"
+          command: npm run audit
+      - notify_step_failure:
+          job_name: "Auditoría de Seguridad"
+
+  # JOB 5: CALIDAD DE CÓDIGO Y SONAR QUALITY GATE (EJECUCIÓN SELECTIVA)
+  code-quality-gate:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Escaneo de Deuda Técnica y Métricas Sonar"
+          command: npm run quality:sonar
+      - validate_quality_gate
+      - store_artifacts:
+          path: code-quality-report.json
+          destination: quality-reports
+      - notify_step_failure:
+          job_name: "Calidad de Código & Sonar Gate"
+
+  # JOB 6: PRUEBAS DE INTEGRACIÓN END-TO-END (EJECUCIÓN SELECTIVA)
+  integration-tests:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Pruebas de Integración E2E sobre Servidor HTTP en Vivo"
+          command: npm run test:integration
+      - notify_step_failure:
+          job_name: "Pruebas de Integración (E2E)"
+
+  # JOB 7: BUILD & EMPAQUETADO DE PRODUCCIÓN (EJECUCIÓN SELECTIVA)
+  build-and-package:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - restore_dependencies_cache
+      - run:
+          name: "Compilación y Empaquetado de Artefactos de Producción"
+          command: npm run build
+      - notify_step_failure:
+          job_name: "Build & Empaquetado"
+
+  # JOB 8: NOTIFICACIÓN GLOBAL DE FINALIZACIÓN EXITOSA
+  pipeline-success-notification:
+    executor: node-executor
+    steps:
+      - setup_workspace
+      - run:
+          name: "Despacho de Notificación Exitosa Multi-Canal"
+          command: |
+            echo "🎉 ¡Pipeline completado con éxito absoluto!"
+            node scripts/notify-pipeline.js \
+              --status=success \
+              --stage="Pipeline Global CI/CD" \
+              --message="✅ Pipeline CircleCI Exitoso: Todas las etapas, pruebas unitarias, análisis de calidad y build fueron aprobados para producción."
+
+# 4. WORKFLOWS ORCHESTRATION (DAG, CONCURRENCIA Y EJECUCIÓN SELECTIVA)
+workflows:
+  version: 2
+  devops-ci-cd-workflow:
+    jobs:
+      # FASE 1: Preparación (Caché centralizada)
+      - prepare-and-cache
+
+      # FASE 2: FAST FEEDBACK (3 Jobs en Paralelo Concurrente)
+      # Se ejecutan en TODAS las ramas (feature/*, bugfix/*, develop, main)
+      - lint:
+          requires:
+            - prepare-and-cache
+      - unit-tests:
+          requires:
+            - prepare-and-cache
+      - security-audit:
+          requires:
+            - prepare-and-cache
+
+      # FASE 3: EJECUCIÓN SELECTIVA DE CALIDAD Y PRUEBAS E2E
+      # Filtro de ramas: solo develop, main, master y release/*
+      - code-quality-gate:
+          requires:
+            - lint
+            - unit-tests
+            - security-audit
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - develop
+                - /^release\/.*/
+
+      - integration-tests:
+          requires:
+            - lint
+            - unit-tests
+            - security-audit
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - develop
+
+      # FASE 4: ENTREGA CONTINUA (CD) - BUILD & EMPAQUETADO
+      # Filtro de ramas: solo main, master y release/* (Omite develop y feature)
+      - build-and-package:
+          requires:
+            - code-quality-gate
+            - integration-tests
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - /^release\/.*/
+
+      # FASE 5: NOTIFICACIÓN DE CIERRE EXITOSO A DISCORD & GITHUB
+      - pipeline-success-notification:
+          requires:
+            - build-and-package
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - /^release\/.*/
